@@ -1,0 +1,21 @@
+.workspace { display:flex; min-height:calc(100vh - 110px); gap:24px; max-width:1440px; margin:auto; }
+.sidebar { width:210px; flex-shrink:0; display:flex; flex-direction:column; gap:9px; padding:16px 12px 16px 0; border-right:1px solid var(--line); }
+.primary { background:var(--accent); color:var(--accent-ink); border:0; border-radius:8px; padding:11px 18px; cursor:pointer; font-weight:600; }
+.caption { color:var(--muted); font-size:12px; line-height:1.8; }
+.conversation,.selected { background:transparent; color:var(--muted); border:0; padding:12px; text-align:left; border-radius:8px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.selected { background:var(--surface-2); color:var(--text); }
+.workbench { padding:12px; font-size:13px; color:var(--muted); }
+.chat { flex:1; min-width:0; display:flex; flex-direction:column; }
+.header { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:15px 0; border-bottom:1px solid var(--line); }
+.header h1 { font-size:21px; margin:0 0 8px; }.header p,.header a { font-size:13px; color:var(--muted); margin:0; }
+.messages { flex:1; padding:24px 0; max-height:62vh; min-height:320px; overflow:auto; }
+.welcome { max-width:590px; margin:48px auto; }.welcome h2 { font-size:29px; font-weight:500; }.welcome p { color:var(--muted); line-height:1.9; }.eyebrow { color:var(--accent); font-size:12px; letter-spacing:2px; }
+.examples { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px; }.examples button { background:var(--surface); color:var(--text); border:1px solid var(--line); padding:11px; border-radius:8px; text-align:left; cursor:pointer; }
+.assistant,.user { margin:0 0 25px; padding:16px 20px; border-radius:10px; }.user { background:var(--surface-2); margin-left:10%; }.assistant { padding-left:4px; }
+.messageLabel { display:flex; gap:14px; color:var(--accent); font-size:12px; margin-bottom:12px; }.messageLabel span { color:var(--muted); }
+.content { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.9; font-size:14px; }.evidenceButton { display:inline-block; background:transparent; border:1px solid var(--line); color:var(--accent); border-radius:6px; padding:6px 10px; font-size:12px; cursor:pointer; margin:14px 8px 0 0; }
+.composer { border:1px solid var(--line-strong); background:var(--surface); border-radius:12px; padding:15px; margin-top:10px; }.controls { display:flex; gap:10px; }.controls select,.controls input { border:1px solid var(--line); background:var(--surface-2); color:var(--text); padding:9px; border-radius:6px; font-size:12px; }.controls input { flex:1; min-width:0; }.composer textarea { width:100%; resize:vertical; background:transparent; color:var(--text); border:0; padding:15px 2px; line-height:1.6; }.sendRow { display:flex; gap:10px; justify-content:space-between; align-items:center; }.sendRow small { font-size:11px; color:var(--muted); }.sendRow button:not(.primary) { padding:9px 15px; cursor:pointer; }
+.error { padding:12px; color:var(--danger); font-size:13px; }
+.evidence { width:350px; flex-shrink:0; border-left:1px solid var(--line); padding:16px; max-height:85vh; overflow:auto; }.evidenceHeader { display:flex; justify-content:space-between; align-items:center; }.evidenceHeader h2 { font-size:18px; }.evidenceHeader button { cursor:pointer; }.evidence details { margin:20px 0; }.evidence summary { cursor:pointer; overflow-wrap:anywhere; font-size:13px; }.evidence small { display:block; color:var(--muted); margin:10px 0; font-size:10px; }.evidence pre { font-size:12px; line-height:1.6; background:var(--surface-2); padding:12px; overflow:auto; }
+@media(max-width:1100px) { .evidence { position:fixed; right:0; top:70px; bottom:0; background:var(--canvas); z-index:20; box-shadow:-12px 0 35px #0006; max-height:none; width:min(450px,90vw); } }
+@media(max-width:700px) { .workspace { flex-direction:column; gap:5px; }.sidebar { width:auto; flex-direction:row; overflow:auto; border:0; padding:0; }.sidebar .caption,.workbench { display:none; }.sidebar button { flex-shrink:0; max-width:160px; }.messages { max-height:55vh; }.welcome { margin:20px 0; }.welcome h2 { font-size:24px; }.sendRow small { max-width:70%; } }

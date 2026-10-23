@@ -17,6 +17,13 @@ def create_source(
     payload: SourceCreate,
     session: Session = Depends(get_session),
 ) -> Source:
+    """校验并登记一个项目来源，为后续采集建立稳定的 normalized URI。
+
+    Args: project_id 为所属项目；payload 为来源类型和原始 URI；session 为数据库会话。
+    Returns: 已提交并刷新后的 Source。
+    Raises: 项目或来源输入无效时抛出 HTTP 404/400。
+    副作用：写入 Source 和审计事件；由 `POST /projects/{project_id}/sources` 调用。
+    """
     project = session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
@@ -53,6 +60,13 @@ def create_source(
 
 @router.get("", response_model=list[SourceRead])
 def list_sources(project_id: str, session: Session = Depends(get_session)) -> list[Source]:
+    """返回项目登记的来源，保持创建顺序以便与采集结果对应。
+
+    Args: project_id 为项目 ID；session 为数据库会话。
+    Returns: 该项目的 Source 列表。
+    Raises: 项目不存在时抛出 HTTP 404；数据库异常向上抛出。
+    副作用：仅读取数据库；由 `GET /projects/{project_id}/sources` 调用。
+    """
     project = session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")

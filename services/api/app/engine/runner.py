@@ -41,6 +41,13 @@ def append_turn(
     observation: str,
     metadata: dict | None = None,
 ) -> LoopTurn:
+    """为当前 run 追加一个有序的 graph turn，并推进 current_turn。
+
+    Args: session/run/project 为运行上下文；node_name/action/observation 描述节点；metadata 为可选诊断信息。
+    Returns: 已 flush、带 turn_index 的 LoopTurn。
+    Raises: 数据库写入失败时抛出异常。
+    副作用：向 session 添加 LoopTurn 并修改 run.current_turn；由各 graph node 调用。
+    """
     turn = LoopTurn(
         run_id=run.id,
         project_id=project.id,
@@ -81,6 +88,13 @@ def initialize_run(session: Session, project: Project) -> AnalysisRun:
 
 
 def start_run(session: Session, project: Project) -> AnalysisRun:
+    """同步初始化并执行一次 Loop，供本地或兼容入口使用。
+
+    Args: session 为数据库会话；project 为可启动项目。
+    Returns: 执行后的 AnalysisRun。
+    Raises: 状态不允许启动或 graph 执行失败时抛出异常。
+    副作用：写入 run、分析产物和运行事件；由同步执行入口调用。
+    """
     run = initialize_run(session, project)
     execute_run(session, project, run)
     return run
@@ -92,12 +106,14 @@ def enqueue_run(
     job_type: str = "start",
     payload: dict | None = None,
 ) -> tuple[AnalysisRun, RunJob]:
-    """创建后台运行任务，不在 HTTP 请求内执行 LangGraph。
+    """创建后台 run/job，避免在 HTTP 请求中直接执行 LangGraph。
 
-    这是 durable runtime 的入口：HTTP 只负责登记目标、任务和事件；实际执行由
-    worker 接管，因此浏览器断开不会影响已经排队的 run。
+    这是 durable runtime 的入口：HTTP 只登记目标、任务和事件，实际执行由 worker 接管。
+    Args: session 为数据库会话；project 为项目；job_type 为任务类型；payload 为可选任务参数。
+    Returns: `(AnalysisRun, RunJob)`，两者尚未由本函数提交。
+    Raises: 项目状态不允许启动时抛出 ValueError。
+    副作用：向 session 添加 run、job 和运行事件；由 run API handler 调用。
     """
-
     ensure_can_start_run(project.status)
     bind_worker_session_to(session)
     run = AnalysisRun(
@@ -116,6 +132,13 @@ def enqueue_run(
 
 
 def resume_run(session: Session, project: Project, run: AnalysisRun) -> AnalysisRun:
+    """在原 LangGraph thread 上恢复一个暂停的 run。
+
+    Args: session 为数据库会话；project/run 为同一项目下的运行记录。
+    Returns: 更新后的 AnalysisRun。
+    Raises: run 不是 paused_for_input 时抛出 ValueError。
+    副作用：执行 graph、更新 checkpoint 和分析产物；由恢复 API 调用。
+    """
     if run.status != "paused_for_input":
         raise ValueError("Only paused runs can be resumed")
     from app.engine.langgraph_runner import resume_run_graph
@@ -147,11 +170,13 @@ def resume_run(session: Session, project: Project, run: AnalysisRun) -> Analysis
 
 
 def execute_run(session: Session, project: Project, run: AnalysisRun) -> None:
-    """执行一次 Loop。
+    """执行一次 Loop，交由 LangGraph 完成真实编排。
 
-    真实编排由 LangGraph StateGraph 负责；本模块保留 API 入口和持久化 helper。
+    Args: session 为 worker 数据库会话；project/run 为待执行上下文。
+    Returns: None；结果通过 run、turn 和 artifact 表持久化。
+    Raises: LangGraph 或数据库异常向上抛出，由 worker 负责标记失败。
+    副作用：提交初始状态并调用 LangGraph；由 `run_one_job` 调用。
     """
-
     from app.engine.langgraph_runner import execute_run_graph
 
     project_id = project.id
@@ -165,6 +190,13 @@ def execute_run(session: Session, project: Project, run: AnalysisRun) -> None:
 
 
 def latest_previous_score(session: Session, run: AnalysisRun) -> int | None:
+    """读取当前 run 之前最近一次质量总分，供本次 run 计算变化量。
+
+    Args: session 为数据库会话；run 为当前分析运行记录。
+    Returns: 历史 overall_score 整数；没有历史分数时为 None。
+    Raises: 数据库查询或分数转换异常向上抛出。
+    副作用：仅读取数据库；由分析持久化流程调用。
+    """
     statement = (
         select(QualityScore.overall_score)
         .where(QualityScore.run_id == run.id)
@@ -179,7 +211,16 @@ def persist_analysis_artifacts(
     run: AnalysisRun,
     analysis: dict,
 ) -> dict:
+    """把分析字典中的集合转换为数据库实体并建立稳定引用。
+
+    Args: session/project/run 为持久化上下文；analysis 为结构化分析结果。
+    Returns: 含已保存实体 ID 和证据引用的字典。
+    Raises: 输入结构缺失或数据库写入失败时抛出异常。
+    副作用：写入 evidence、findings、risks、questions、recommendations 等实体。
+    """
+    # evidence_ref_map 把分析阶段的 client_ref 映射到数据库生成的 evidence ID。
     evidence_ref_map: dict[str, str] = {}
+    # persisted_* 保存后续 state/verifier 需要的精简引用，而不是完整 ORM 对象。
     persisted_evidence: list[dict] = []
     for evidence in analysis["evidence"]:
         item = EvidenceItem(
@@ -283,6 +324,7 @@ def persist_analysis_artifacts(
             }
         )
     session.flush()
+    # 返回各类已持久化实体的引用摘要，供后续节点继续计算状态和质量分数。
     return {
         "evidence": persisted_evidence,
         "findings": persisted_findings,
@@ -293,6 +335,13 @@ def persist_analysis_artifacts(
 
 
 def find_answered_question(session: Session, project_id: str, question: dict) -> Question | None:
+    """查找项目中相同 prompt 的最新已回答问题，避免重复写入历史问题。
+
+    Args: session 为数据库会话；project_id 为项目 ID；question 至少包含 prompt。
+    Returns: 最新 Question；不存在时为 None。
+    Raises: 数据库查询异常或缺少 prompt 时向上抛出。
+    副作用：仅读取数据库；由分析结果持久化流程调用。
+    """
     statement = (
         select(Question)
         .where(

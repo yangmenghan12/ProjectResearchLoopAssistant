@@ -13,6 +13,11 @@ def validate_llm_verifier_output(payload: dict[str, Any]) -> dict[str, Any]:
 
     LLM 输出只能作为第二意见进入系统，因此这里不保留任意嵌套对象，避免后续消费者误把
     未验证字段当作确定性事实。
+
+    Args: payload 为模型返回的 JSON object。
+    Returns: 含 passed、confidence、issues 和 suggested_next_actions 的字典。
+    Raises: 不主动抛出异常；非字典输入按空结果处理。
+    副作用：无；由 `llm_verify_package_node` 调用。
     """
 
     if not isinstance(payload, dict):

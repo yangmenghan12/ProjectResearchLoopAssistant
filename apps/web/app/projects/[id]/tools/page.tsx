@@ -32,11 +32,11 @@ function ToolCard({ tool }: { tool: ToolRegistration }) {
     <div className="row">
       <div className="toolbar">
         <div>
-          <p className="meta">{tool.permission_level} · {tool.enabled ? "已启用" : "已禁用"}</p>
+          <p className="meta">{tool.permission_level} · {tool.transport === "mcp" ? "MCP" : "本地函数"} · {tool.enabled ? "已启用" : "已禁用"}</p>
           <h2>{tool.name}</h2>
         </div>
-        <span className={tool.permission_level === "L0" ? "badge badge-ok" : "badge badge-danger"}>
-          {tool.permission_level === "L0" ? "只读" : "需拦截"}
+        <span className={tool.model_visible ? "badge badge-ok" : "badge badge-warning"}>
+          {tool.model_visible ? "可供模型调用" : "仅后端调用"}
         </span>
       </div>
       <p>{tool.description}</p>
@@ -100,10 +100,10 @@ export default async function ProjectToolsPage({ params }: { params: Promise<{ i
 
       <section className="panel stack">
         <div>
-          <h2>L0 只读权限边界</h2>
+          <h2>统一工具调用约束</h2>
           <p className="muted">
-            当前 Tool Gateway 只放行 L0 只读工具。未知工具、禁用工具以及未来 L1/L2 工具会被拒绝，
-            每一次尝试都会写入 ToolCall 审计账本。
+            本地工具、MCP 工具和资料采集共用一个网关与注册表。模型只能使用当前任务允许的只读工具；
+            L1 资料采集由后端绑定来源并显式授权。所有调用均校验参数并写入同一份调用账本。
           </p>
         </div>
       </section>
@@ -117,7 +117,7 @@ export default async function ProjectToolsPage({ params }: { params: Promise<{ i
             ))}
           </div>
         ) : (
-          <p className="muted">还没有注册任何只读工具。</p>
+          <p className="muted">还没有注册任何工具。</p>
         )}
       </section>
 

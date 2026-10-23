@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 
-TASK_TYPE_PATTERN = r"^(analyzer|verifier|report)$"
+TASK_TYPE_PATTERN = r"^(analyzer|verifier|report|assistant_chat|assistant_router|assistant_qa)$"
 ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 

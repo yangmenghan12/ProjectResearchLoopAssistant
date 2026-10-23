@@ -40,8 +40,14 @@ def render_report_markdown(
     """把 Analysis Package 渲染成稳定的中文 Markdown 报告快照。
 
     报告是可审计产物：它不重新推理，只忠实呈现已经落库的证据、校验结果和人工可复核的结论。
+
+    Args: project 为项目对象；package 为 Analysis Package；inventory 为来源 inventory；verifier_result 为校验结果。
+    Returns: 稳定的中文 Markdown 字符串。
+    Raises: 输入字段缺失时使用默认展示值；渲染异常向上抛出。
+    副作用：无外部 IO；由报告 service 调用。
     """
 
+    # lines 按固定章节顺序累积 Markdown 文本，确保相同输入生成稳定报告。
     lines: list[str] = [
         f"# {text(value_of(project, 'name', '项目'))} 项目调研报告",
         "",
@@ -54,6 +60,7 @@ def render_report_markdown(
         "",
     ]
 
+    # 各 render_* 函数只返回文本行，不执行数据库或文件 IO。
     lines.extend(render_profile_summary(package, verifier_result))
     lines.extend(render_source_bundle_summary(inventory))
     lines.extend(
@@ -83,10 +90,18 @@ def render_report_markdown(
     lines.extend(render_questions(package))
     lines.extend(render_recommendations(package))
     lines.extend(render_timeline(package))
+    # 返回带结尾换行的完整 Markdown，便于直接写入报告 artifact。
     return "\n".join(lines).strip() + "\n"
 
 
 def render_profile_summary(package: dict[str, Any], verifier_result: dict[str, Any]) -> list[str]:
+    """渲染报告中的研究 profile 摘要和核心检查清单。
+
+    Args: package 为分析包；verifier_result 为校验结果。
+    Returns: Markdown 行列表。
+    Raises: 输入字段结构异常时可能向上抛出。
+    副作用：无外部 IO；由 `render_report_markdown` 调用。
+    """
     profile = profile_info(package, verifier_result)
     lines = ["## 调研 Profile", ""]
     if not profile:
@@ -109,6 +124,13 @@ def render_profile_summary(package: dict[str, Any], verifier_result: dict[str, A
 
 
 def render_source_bundle_summary(inventory: dict[str, Any]) -> list[str]:
+    """渲染资料包状态、条目总数、采集数和失败数摘要。
+
+    Args: inventory 为来源采集库存。
+    Returns: Markdown 行列表。
+    Raises: 输入字段结构异常时可能向上抛出。
+    副作用：无外部 IO；由 `render_report_markdown` 调用。
+    """
     lines = ["## 资料包摘要", ""]
     bundles = as_list(inventory.get("source_bundles"))
     if not bundles:
@@ -132,6 +154,13 @@ def render_source_bundle_summary(inventory: dict[str, Any]) -> list[str]:
 
 
 def render_executive_summary(project: Any, package: dict[str, Any], verifier_result: dict[str, Any]) -> list[str]:
+    """渲染报告开头的项目、发现、风险和 verifier 结论摘要。
+
+    Args: project 为项目实体；package 为分析包；verifier_result 为校验结果。
+    Returns: Markdown 行列表。
+    Raises: 输入字段结构异常时可能向上抛出。
+    副作用：无外部 IO；由 `render_report_markdown` 调用。
+    """
     findings_count = len(as_list(package.get("findings")))
     risks_count = len(as_list(package.get("risks")))
     passed = bool(verifier_result.get("passed", False))

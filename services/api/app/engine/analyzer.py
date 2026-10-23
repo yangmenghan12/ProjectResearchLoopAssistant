@@ -1,9 +1,22 @@
 def evidence_id(seed: str) -> str:
+    """把稳定 seed 转为确定性 evidence client_ref，保证重复分析可关联。
+
+    Args: seed 为来源或文件线索字符串。
+    Returns: 以 `evidence:` 开头的稳定引用字符串。
+    Raises: 不主动抛出异常。
+    副作用：无；由 `analyze_context` 调用。
+    """
     return f"evidence:{seed}"
 
 
 def analyze_context(context: dict) -> dict:
-    """基于上下文生成 Analysis Package 产物。"""
+    """基于上下文生成确定性的 Analysis Package 草稿。
+
+    Args: context 为来源快照、代码地图、项目配置和审核反馈组成的字典。
+    Returns: 含 evidence、findings、risks、questions、recommendations 的字典。
+    Raises: context 字段结构不符合预期时可能抛出 KeyError 或 TypeError。
+    副作用：无外部 IO；由 LangGraph `analyze_sources_node` 调用。
+    """
 
     evidence: list[dict] = []
     findings: list[dict] = []
@@ -16,6 +29,7 @@ def analyze_context(context: dict) -> dict:
     profile_label = research_profile.get("label") or "research profile"
     review_next_steps: list[str] = []
 
+    # 先把已采集事实转换为 evidence，后续 findings/risks 只能引用这些稳定 ref。
     for snapshot in context["snapshots"]:
         evidence.append(
             {
@@ -152,6 +166,7 @@ def analyze_context(context: dict) -> dict:
             }
         )
 
+    # risk_count 只用于生成建议文本和 metadata，不代表最终 verifier 风险等级。
     risk_count = len(risks)
     # Profile checklist 只影响后续复核路径，不伪造成已经采集到的证据。
     profile_next_steps = [
@@ -181,6 +196,7 @@ def analyze_context(context: dict) -> dict:
         }
     )
 
+    # 返回五类可持久化分析集合；后续 LLM merge 和 verifier 会在此结构上继续处理。
     return {
         "evidence": evidence,
         "findings": findings,

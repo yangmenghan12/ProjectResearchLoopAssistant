@@ -48,7 +48,13 @@ def fetch_web_url(
     excerpt_chars: int,
     transport: httpx.BaseTransport | None = None,
 ) -> dict:
-    """读取公开网页并提取短摘要；不执行页面脚本。"""
+    """读取公开网页并提取短摘要；不执行页面脚本。
+
+    Args: url 为 http/https URL；timeout_seconds 为正数超时；excerpt_chars 为正数摘要上限。
+    Returns: 含网页标题、摘要、最终 URL 和响应元数据的字典。
+    Raises: 网络错误或非 2xx 响应时抛出 httpx 异常。
+    副作用：发起外部 HTTP GET；由 `collect_one_source` 调用。
+    """
 
     with httpx.Client(
         follow_redirects=True,

@@ -35,14 +35,14 @@ class LoopGraphState(TypedDict, total=False):
     这样既能复用 FastAPI 测试注入的 session，也能让 checkpoint 只保存可序列化数据。
     """
 
-    project_id: str
-    run_id: str
-    context: dict[str, Any]
-    analysis: dict[str, Any]
-    persisted: dict[str, Any]
-    score: dict[str, Any]
-    decision: dict[str, Any]
-    pending_interrupt: dict[str, Any]
+    project_id: str  # 当前调研项目的唯一 ID。
+    run_id: str  # 当前 Loop 运行记录的唯一 ID。
+    context: dict[str, Any]  # 从已采集来源和审核反馈构建的分析上下文。
+    analysis: dict[str, Any]  # 确定性分析与可接受的 LLM 补充结果。
+    persisted: dict[str, Any]  # 已写入数据库的证据、发现、风险等实体引用。
+    score: dict[str, Any]  # 当前分析包的确定性质量评分及 LLM 辅助意见。
+    decision: dict[str, Any]  # 状态机决定的完成、暂停或失败结果。
+    pending_interrupt: dict[str, Any]  # LangGraph interrupt 暂停时等待的恢复数据。
 
 
 def execute_run_graph(
@@ -52,9 +52,17 @@ def execute_run_graph(
     thread_id: str,
     checkpointer: SqlAlchemyCheckpointSaver | None = None,
 ) -> None:
-    """通过真实 LangGraph 编排执行一次 Loop，并写入 checkpoint。"""
+    """通过真实 LangGraph 编排执行一次 Loop，并写入 checkpoint。
 
+    Args: session 为数据库会话；project_id/run_id/thread_id 为非空 ID；checkpointer 可选。
+    Returns: None，结果持久化到 run、turn、artifact 和 checkpoint。
+    Raises: graph 节点或 checkpoint 写入失败时向上抛出异常。
+    副作用：执行 LangGraph 并提交数据库步骤；由 worker 调用。
+    """
+
+    # token 用于在 graph 执行结束后恢复 ContextVar，避免污染同一线程的后续请求。
     token = _GRAPH_SESSION.set(session)
+    # saver 负责 LangGraph 状态持久化；未传入时从业务 Session 的 bind 创建隔离工厂。
     saver = checkpointer or SqlAlchemyCheckpointSaver.from_session_bind(session)
     try:
         graph = build_loop_graph(saver)
@@ -72,8 +80,15 @@ def resume_run_graph(
     resume_payload: dict[str, Any],
     checkpointer: SqlAlchemyCheckpointSaver | None = None,
 ) -> None:
-    """从 LangGraph interrupt checkpoint 恢复同一个 run/thread。"""
+    """从 LangGraph interrupt checkpoint 恢复同一个 run/thread。
 
+    Args: session/project_id/run_id/thread_id 标识原 run；resume_payload 为恢复输入；checkpointer 可选。
+    Returns: None，恢复后的状态写回原 thread checkpoint。
+    Raises: checkpoint 不存在或 graph 恢复失败时向上抛出异常。
+    副作用：继续执行 LangGraph 并写入数据库；由 `resume_run` 调用。
+    """
+
+    # resume 仍使用业务 Session 执行节点，checkpoint saver 负责读取待恢复状态。
     token = _GRAPH_SESSION.set(session)
     saver = checkpointer or SqlAlchemyCheckpointSaver.from_session_bind(session)
     try:
@@ -90,13 +105,25 @@ def stream_run_graph_events(
     run_id: str,
     thread_id: str,
     checkpointer: SqlAlchemyCheckpointSaver | None = None,
+    *,
+    continue_existing: bool = False,
 ) -> Generator[dict[str, Any], None, None]:
-    """逐节点执行 LangGraph，并把节点完成状态暴露给外层 SSE。"""
+    """逐节点执行 LangGraph，并把节点完成状态暴露给外层 SSE。
 
+    Args: session/project_id/run_id/thread_id 标识原 run；checkpointer 可选。
+    Returns: 逐节点产生事件字典的生成器。
+    Raises: graph 执行或数据库读取失败时在迭代过程中抛出异常。
+    副作用：执行并持久化每个 graph step；由 SSE 响应生成器调用。
+    """
+
+    # stream 入口只构建一次 graph 和 saver，后续每个 chunk 对应一个节点更新。
     saver = checkpointer or SqlAlchemyCheckpointSaver.from_session_bind(session)
     graph = build_loop_graph(saver)
+    initial = {"project_id": project_id, "run_id": run_id}
+    if continue_existing and graph.get_state(graph_config(thread_id)).values:
+        initial = None
     graph_events = graph.stream(
-        {"project_id": project_id, "run_id": run_id},
+        initial,
         graph_config(thread_id),
         stream_mode="updates",
         durability="sync",
@@ -110,9 +137,11 @@ def stream_run_graph_events(
                 break
         finally:
             _GRAPH_SESSION.reset(token)
+        # chunk 是 LangGraph 的节点更新字典；这里只向 SSE 暴露节点名和数据库中的最新状态。
         for node_name in chunk:
             run = session.get(AnalysisRun, run_id)
             project = session.get(Project, project_id)
+            # run/project 可能在异常或恢复场景下暂时不存在，因此状态字段使用 unknown 降级。
             yield {
                 "run_id": run_id,
                 "project_id": project_id,
@@ -126,7 +155,13 @@ def stream_run_graph_events(
 
 
 def build_loop_graph(checkpointer: SqlAlchemyCheckpointSaver | None = None):
-    """构建 Loop StateGraph。"""
+    """构建 Loop StateGraph，统一声明节点顺序和 interrupt 后的路由。
+
+    Args: checkpointer 为可选 checkpoint saver；为空时构建无持久化编译图。
+    Returns: 已编译的 LangGraph graph。
+    Raises: 节点或 checkpointer 配置无效时抛出 graph 配置异常。
+    副作用：创建内存中的 graph 对象；由执行、恢复和流式入口调用。
+    """
 
     builder = StateGraph(LoopGraphState)
     builder.add_node("load_state", load_state_node)
@@ -162,11 +197,24 @@ def build_loop_graph(checkpointer: SqlAlchemyCheckpointSaver | None = None):
 
 
 def graph_config(thread_id: str) -> dict[str, dict[str, str]]:
+    """构造 LangGraph 使用的 thread 配置，确保 checkpoint 属于同一运行线程。
+
+    Args: thread_id 为非空运行线程 ID。
+    Returns: 包含 thread_id 和空 checkpoint namespace 的 configurable 字典。
+    Raises: 不主动抛出异常。
+    副作用：无；由 graph 执行、恢复和 checkpoint 查询调用。
+    """
     return {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 
 
 def route_after_decision(state: LoopGraphState) -> str:
-    """用户回答 interrupt 后回到上下文构建节点，避免持久化中断前的旧 decision。"""
+    """用户回答 interrupt 后回到上下文构建节点，避免沿用旧 decision。
+
+    Args: state 为当前 LoopGraphState，可能含 pending_interrupt.resume。
+    Returns: `rebuild_after_interrupt` 或 `persist` 路由名。
+    Raises: 不主动抛出异常；异常 state 可能导致后续 graph 节点失败。
+    副作用：无；由 LangGraph 条件边调用。
+    """
 
     if state.get("pending_interrupt", {}).get("resume") is not None:
         return "rebuild_after_interrupt"
@@ -174,6 +222,13 @@ def route_after_decision(state: LoopGraphState) -> str:
 
 
 def current_session() -> Session:
+    """取得当前 graph 节点通过 ContextVar 注入的业务 Session。
+
+    Args: 无。
+    Returns: 当前执行上下文中的 SQLAlchemy Session。
+    Raises: 节点在 graph 入口外调用时抛出 RuntimeError。
+    副作用：无；由各 LangGraph node 调用。
+    """
     session = _GRAPH_SESSION.get()
     if session is None:
         raise RuntimeError("Loop graph session is not configured")
@@ -181,6 +236,13 @@ def current_session() -> Session:
 
 
 def load_project_run(session: Session, state: LoopGraphState) -> tuple[Project, AnalysisRun]:
+    """根据 graph state 加载并校验同一项目下的 Project 和 AnalysisRun。
+
+    Args: session 为数据库会话；state 必须包含 project_id 和 run_id。
+    Returns: `(Project, AnalysisRun)`。
+    Raises: 任一实体不存在时抛出 ValueError。
+    副作用：仅读取数据库；由各 graph node 调用。
+    """
     project = session.get(Project, state["project_id"])
     run = session.get(AnalysisRun, state["run_id"])
     if project is None:
@@ -202,6 +264,13 @@ def update_run_checkpoint_id(
     thread_id: str,
     saver: SqlAlchemyCheckpointSaver,
 ) -> None:
+    """读取 thread 最新 checkpoint ID 并回写 AnalysisRun，便于查看和恢复。
+
+    Args: session 为数据库会话；run_id/thread_id 标识运行；saver 为 checkpoint saver。
+    Returns: None；找不到 checkpoint 时不更新。
+    Raises: checkpoint 查询或数据库提交失败时抛出异常。
+    副作用：更新 AnalysisRun.last_checkpoint_id 并提交事务；由 graph 入口调用。
+    """
     latest = saver.get_tuple(graph_config(thread_id))
     if latest is None:
         return
@@ -212,6 +281,13 @@ def update_run_checkpoint_id(
 
 
 def load_state_node(state: LoopGraphState) -> dict[str, Any]:
+    """加载项目与 run 的当前持久化状态，作为 graph 的起始上下文。
+
+    Args: state 至少包含 `project_id` 和 `run_id`。
+    Returns: 用于后续节点的状态增量字典。
+    Raises: 项目或 run 不存在时抛出 ValueError。
+    副作用：读取数据库并提交本节点事件；由 `build_loop_graph` 调用。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     append_turn(
@@ -228,9 +304,28 @@ def load_state_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def build_context_node(state: LoopGraphState) -> dict[str, Any]:
+    """从项目 inventory 和历史反馈构建本轮分析上下文。
+
+    Args: state 为已加载项目/run 的 graph state。
+    Returns: 含 snapshots、codebase_maps 等字段的 context 增量。
+    Raises: 数据库查询或上下文构建失败时抛出异常。
+    副作用：读取数据库并记录 graph turn；由 `load_state_node` 调用。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     context = build_analysis_context(session, project.id)
+    # Personal assistant reports use the exact evidence snapshot set of this task,
+    # rather than mixing old source versions into the new report.
+    from app.db.models import RunJob
+    from sqlalchemy import select
+    assistant_job = session.scalar(select(RunJob).where(RunJob.run_id == run.id,
+        RunJob.job_type == "assistant").order_by(RunJob.created_at.desc()).limit(1))
+    if assistant_job and assistant_job.payload_json.get("evidence_snapshot_ids"):
+        snapshot_ids = set(assistant_job.payload_json["evidence_snapshot_ids"])
+        context["snapshots"] = [s for s in context["snapshots"] if s["id"] in snapshot_ids]
+        map_id = assistant_job.payload_json.get("codebase_map_id")
+        context["codebase_maps"] = [m for m in context["codebase_maps"] if m["id"] == map_id]
+        context["project"]["analysis_goal"] = assistant_job.payload_json.get("question") or project.analysis_goal
     append_turn(
         session,
         run,
@@ -245,6 +340,13 @@ def build_context_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def analyze_sources_node(state: LoopGraphState) -> dict[str, Any]:
+    """运行不依赖 LLM 的确定性分析，先建立可验证的分析基线。
+
+    Args: state 必须包含已构建的 `context`。
+    Returns: 含 `analysis` 的状态增量。
+    Raises: 输入结构缺失或确定性分析失败时抛出异常。
+    副作用：读取数据库、写入 turn；由 `build_context_node` 调用。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     analysis = analyze_context(state["context"])
@@ -265,6 +367,13 @@ def analyze_sources_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def llm_analyze_sources_node(state: LoopGraphState) -> dict[str, Any]:
+    """调用可选 LLM 补充分析，并仅合并通过结构化校验的结果。
+
+    Args: state 必须包含 context 和确定性 analysis。
+    Returns: 含原始或合并后 `analysis` 的状态增量。
+    Raises: required LLM 异常会被记录后降级为确定性结果。
+    副作用：可能访问外部 LLM，写入账本、artifact 和 graph turn。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     analysis = state["analysis"]
@@ -470,6 +579,13 @@ def build_llm_analyzer_prompt(context: dict[str, Any], analysis: dict[str, Any])
 
 
 def update_analysis_node(state: LoopGraphState) -> dict[str, Any]:
+    """把当前分析草稿写入实体表，供 verifier 和报告使用。
+
+    Args: state 必须包含项目/run 标识和 `analysis`。
+    Returns: 含 `persisted` 引用集合的状态增量。
+    Raises: 分析结构或数据库写入失败时抛出异常。
+    副作用：写入分析实体和 graph turn；由 LLM 分析节点调用。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     persisted = persist_analysis_artifacts(session, project, run, state["analysis"])
@@ -487,6 +603,13 @@ def update_analysis_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def verify_package_node(state: LoopGraphState) -> dict[str, Any]:
+    """执行确定性质量评分，判断分析包是否具备进入审核的基础。
+
+    Args: state 必须包含 context、persisted 和项目运行标识。
+    Returns: 含 `score` 的状态增量。
+    Raises: 评分输入缺失或数据库写入失败时抛出异常。
+    副作用：读取分析实体并写入 QualityScore、graph turn；由更新节点调用。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     previous_score = latest_previous_score(session, run)
@@ -533,6 +656,13 @@ def verify_package_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def llm_verify_package_node(state: LoopGraphState) -> dict[str, Any]:
+    """让 LLM 对确定性质量结果提供非阻塞的辅助复核意见。
+
+    Args: state 必须包含 context、analysis、persisted 和 score。
+    Returns: 含 `score.llm_assisted` 的状态增量。
+    Raises: LLM 或 JSON 校验错误会被转为辅助复核失败状态。
+    副作用：可能访问外部 LLM，并写入账本和 graph turn。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     score = dict(state["score"])
@@ -675,6 +805,13 @@ def sanitize_llm_verifier_error(exc: Exception) -> str:
 
 
 def decide_next_state_node(state: LoopGraphState) -> dict[str, Any]:
+    """根据分析包和质量评分决定完成、暂停或继续路径。
+
+    Args: state 必须包含 context、persisted、score 和项目运行标识。
+    Returns: 含 `decision` 的状态增量；暂停时还包含 interrupt 信息。
+    Raises: graph 状态缺失时抛出 KeyError；用户输入通过 interrupt 暂停。
+    副作用：更新 run 状态、写入 turn，必要时触发 LangGraph interrupt。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     decision = decide_terminal_state(
@@ -733,6 +870,13 @@ def decide_next_state_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def persist_state_node(state: LoopGraphState) -> dict[str, Any]:
+    """将终态决策写回项目和 run，并记录停止事件。
+
+    Args: state 必须包含项目运行标识和 `decision`。
+    Returns: 空状态增量字典。
+    Raises: 终态缺失或数据库写入失败时抛出异常。
+    副作用：更新项目/run 状态、完成时间并写入审计事件；由终态路由调用。
+    """
     session = current_session()
     project, run = load_project_run(session, state)
     decision = state["decision"]
@@ -762,6 +906,13 @@ def persist_state_node(state: LoopGraphState) -> dict[str, Any]:
 
 
 def node_metadata(node_name: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """生成包含节点顺序和编排器标识的统一 turn metadata。
+
+    Args: node_name 为 graph 节点名；extra 为可选的节点专属元数据。
+    Returns: 合并后的 metadata 字典。
+    Raises: 不主动抛出异常；未知节点使用末尾顺序。
+    副作用：无；由各 graph node 记录 turn 时调用。
+    """
     node_order = (
         LANGGRAPH_NODE_ORDER.index(node_name) + 1
         if node_name in LANGGRAPH_NODE_ORDER

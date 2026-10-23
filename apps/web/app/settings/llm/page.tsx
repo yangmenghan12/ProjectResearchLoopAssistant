@@ -4,7 +4,7 @@ import { createLlmProfile, listLlmProfiles } from "@/lib/api";
 import { statusLabel } from "@/lib/labels";
 import type { LlmProfile } from "@/types/project";
 
-const TASK_TYPES = new Set(["analyzer", "verifier", "report"]);
+const TASK_TYPES = new Set(["analyzer", "verifier", "report", "assistant_chat", "assistant_router", "assistant_qa"]);
 
 function formText(formData: FormData, name: string): string {
   return String(formData.get(name) ?? "").trim();
@@ -21,7 +21,7 @@ function requiredText(formData: FormData, name: string, label: string): string {
 function taskTypeField(formData: FormData): string {
   const value = formText(formData, "task_type");
   if (!TASK_TYPES.has(value)) {
-    throw new Error("任务类型只能是智能分析、智能复核或报告生成");
+    throw new Error("请选择有效的模型任务类型");
   }
   return value;
 }
@@ -192,6 +192,9 @@ export default async function LlmSettingsPage() {
                 <option value="analyzer">智能分析</option>
                 <option value="verifier">智能复核</option>
                 <option value="report">报告生成</option>
+                <option value="assistant_chat">助手聊天</option>
+                <option value="assistant_router">助手意图判断</option>
+                <option value="assistant_qa">助手源码取证与问答</option>
               </select>
             </label>
             <label className="field">

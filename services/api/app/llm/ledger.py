@@ -31,6 +31,13 @@ def record_llm_call(
     latency_ms: int | None = None,
     error_message: str | None = None,
 ) -> LLMCall:
+    """将一次 LLM 尝试的输入引用、状态、用量和延迟写入账本。
+
+    Args: session 为数据库会话；messages、usage 和引用参数必须可 JSON 序列化。
+    Returns: 已加入 session 的 LLMCall。
+    Raises: 数据库写入或序列化异常向上抛出。
+    副作用：写入数据库；由 LLM router、分析和报告流程调用。
+    """
     call = LLMCall(
         project_id=project_id,
         run_id=run_id,

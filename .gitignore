@@ -30,6 +30,9 @@ workspace/projects/*
 .superpowers/
 course_materials/
 
+# Personal notes and their local assets
+/1.笔记/
+
 # OS and editor
 .DS_Store
 Thumbs.db

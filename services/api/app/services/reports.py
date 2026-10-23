@@ -17,6 +17,7 @@ from app.db.models import (
     Recommendation,
     ReportSnapshot,
     Risk,
+    RunJob,
     SourceBundle,
     SourceSnapshot,
     utc_now,
@@ -49,6 +50,11 @@ def create_report_snapshot(
 
     生成报告不会重新执行分析，也不会修改外部系统；它只把已经沉淀的
     Analysis Package、Source Inventory 和 verifier 结果固化成可评审产物。
+
+    Args: session 为数据库会话；project 为项目；run_id 可选指定运行 ID。
+    Returns: 尚未提交的 ReportSnapshot。
+    Raises: 找不到 run 时抛出 LookupError；报告前置条件不满足时抛出 ValueError。
+    副作用：读取分析数据并向 session 添加报告实体；由报告 API 调用。
     """
 
     run = get_run_for_report(session, project, run_id)
@@ -56,7 +62,7 @@ def create_report_snapshot(
         raise ValueError(f"Run status `{run.status}` is not ready for report review")
 
     package = build_analysis_package(session, run)
-    inventory = build_inventory(session, project)
+    inventory = build_inventory(session, project, run_id=run.id)
     verifier_result = verify_analysis_package(package, inventory)
     title = f"{project.name} Project Research Report"
     markdown = render_report_markdown(project, package, inventory, verifier_result)
@@ -85,7 +91,13 @@ def create_intelligent_report_snapshot(
     *,
     run_id: str | None = None,
 ) -> ReportSnapshot:
-    """生成确定性报告，再尝试追加受证据约束的 LLM 解读段落。"""
+    """生成确定性报告，再尝试追加受证据约束的 LLM 解读段落。
+
+    Args: session 为数据库会话；project 为项目；run_id 可选指定运行 ID。
+    Returns: 尚未提交的 ReportSnapshot。
+    Raises: 基础报告生成失败时抛出 LookupError/ValueError；LLM 非必需失败会降级。
+    副作用：可能访问外部 LLM，并写入报告 artifact、账本和快照；由 intelligent report API 调用。
+    """
 
     report = create_report_snapshot(session, project, run_id=run_id)
     session.flush()
@@ -95,7 +107,7 @@ def create_intelligent_report_snapshot(
             raise LookupError("Run not found")
 
         package = build_analysis_package(session, run)
-        inventory = build_inventory(session, project)
+        inventory = build_inventory(session, project, run_id=run.id)
         evidence_ids = [
             str(evidence.id).strip()
             for evidence in package["evidence_items"]
@@ -233,6 +245,13 @@ def add_llm_report_artifact(
     content_json: dict[str, Any],
     validation_result_json: dict[str, Any],
 ) -> LLMReportArtifact:
+    """保存已经通过校验的 LLM 报告片段及其 evidence 引用。
+
+    Args: session 为数据库会话；project_id/run_id/report_id 标识报告；call_id 为 LLM 账本 ID；content_json 为结果。
+    Returns: 已加入 session 的 LLMReportArtifact。
+    Raises: 数据库写入失败时抛出异常。
+    副作用：写入 LLM 报告 artifact；由 intelligent report 流程调用。
+    """
     artifact = LLMReportArtifact(
         project_id=project_id,
         run_id=run_id,
@@ -396,6 +415,13 @@ def review_report_snapshot(
     decision: str,
     comment: str | None,
 ) -> ReportSnapshot:
+    """记录人工审核决定，并在需要补充时创建后续问题和 run。
+
+    Args: session/project/report 为审核上下文；decision 为 approved/rejected/needs_more；comment 可选。
+    Returns: 更新后的 ReportSnapshot。
+    Raises: decision 不在允许集合中时抛出 ValueError。
+    副作用：修改报告和项目状态，可能创建 Question、RunJob 并写入审计事件。
+    """
     if decision not in REVIEW_STATUS_BY_DECISION:
         raise ValueError(f"Unsupported review decision `{decision}`")
     review_comment = normalized_review_comment(decision, comment)
@@ -497,6 +523,13 @@ def create_review_feedback_question(
 
 
 def get_latest_report(session: Session, project: Project) -> ReportSnapshot | None:
+    """查询项目最新创建的报告快照。
+
+    Args: session 为数据库会话；project 为已加载项目。
+    Returns: 最新 ReportSnapshot；没有报告时为 None。
+    Raises: 数据库查询异常向上抛出。
+    副作用：仅读取数据库；由报告 API 调用。
+    """
     return session.scalar(
         select(ReportSnapshot)
         .where(ReportSnapshot.project_id == project.id)
@@ -505,6 +538,13 @@ def get_latest_report(session: Session, project: Project) -> ReportSnapshot | No
 
 
 def get_run_for_report(session: Session, project: Project, run_id: str | None) -> AnalysisRun:
+    """解析报告使用的 run，默认选择项目最新的分析运行。
+
+    Args: session 为数据库会话；project 为项目；run_id 可选指定运行。
+    Returns: 属于该项目的 AnalysisRun。
+    Raises: 指定 run 不存在或项目没有 run 时抛出 LookupError。
+    副作用：仅读取数据库；由报告生成流程调用。
+    """
     if run_id:
         run = session.get(AnalysisRun, run_id)
         if run is None or run.project_id != project.id:
@@ -522,7 +562,16 @@ def get_run_for_report(session: Session, project: Project, run_id: str | None) -
 
 
 def build_analysis_package(session: Session, run: AnalysisRun) -> dict[str, Any]:
+    """聚合 run 的过程记录和分析实体，形成报告与 verifier 共用的数据包。
+
+    Args: session 为数据库会话；run 为已加载的 AnalysisRun。
+    Returns: 包含项目 profile、run、turns 和分析集合的字典。
+    Raises: 数据库查询异常向上抛出。
+    副作用：仅读取数据库；由报告生成和详情接口调用。
+    """
+    # project 提供报告标题和 profile key；run 本身只保存运行级别信息。
     project = session.get(Project, run.project_id)
+    # profile 决定报告展示章节和 verifier 规则，缺失时由注册表回退默认 profile。
     profile = get_research_profile(project.research_profile if project is not None else None)
     return {
         "project": {
@@ -552,7 +601,15 @@ def build_analysis_package(session: Session, run: AnalysisRun) -> dict[str, Any]
     }
 
 
-def build_inventory(session: Session, project: Project) -> dict[str, Any]:
+def build_inventory(session: Session, project: Project, *, run_id: str | None = None) -> dict[str, Any]:
+    """将项目来源快照、代码地图和资料包整理为报告 inventory。
+
+    Args: session 为数据库会话；project 为已加载项目。
+    Returns: 可序列化的 inventory 字典。
+    Raises: 数据库查询异常向上抛出。
+    副作用：仅读取数据库；由报告渲染和 verifier 调用。
+    """
+    # snapshots 是所有来源采集结果，按创建顺序供报告和 verifier 使用。
     snapshots = list(
         session.scalars(
             select(SourceSnapshot)
@@ -560,6 +617,7 @@ def build_inventory(session: Session, project: Project) -> dict[str, Any]:
             .order_by(SourceSnapshot.created_at.asc(), SourceSnapshot.id.asc())
         ).all()
     )
+    # codebase_maps 保存代码库扫描出的技术栈、入口、依赖和测试线索。
     codebase_maps = list(
         session.scalars(
             select(CodebaseMap)
@@ -567,6 +625,7 @@ def build_inventory(session: Session, project: Project) -> dict[str, Any]:
             .order_by(CodebaseMap.created_at.asc(), CodebaseMap.id.asc())
         ).all()
     )
+    # source_bundles 只预加载条目，用于生成每个资料包的状态计数摘要。
     source_bundles = list(
         session.scalars(
             select(SourceBundle)
@@ -575,6 +634,16 @@ def build_inventory(session: Session, project: Project) -> dict[str, Any]:
             .order_by(SourceBundle.created_at.asc(), SourceBundle.id.asc())
         ).all()
     )
+    if run_id:
+        job = session.scalar(select(RunJob).where(RunJob.run_id == run_id,
+            RunJob.job_type == "assistant").order_by(RunJob.created_at.desc()).limit(1))
+        if job and "evidence_snapshot_ids" in job.payload_json:
+            allowed = set(job.payload_json["evidence_snapshot_ids"])
+            snapshots = [s for s in snapshots if s.id in allowed]
+            map_id = job.payload_json.get("codebase_map_id")
+            codebase_maps = [m for m in codebase_maps if m.id == map_id]
+            source_bundles = []
+    # 返回 inventory 的三类内容：来源快照、代码库地图和资料包聚合摘要。
     return {
         "snapshots": snapshots,
         "codebase_maps": codebase_maps,
@@ -594,10 +663,24 @@ def build_inventory(session: Session, project: Project) -> dict[str, Any]:
 
 
 def count_bundle_items_by_status(bundle: SourceBundle, status: str) -> int:
+    """统计资料包中处于指定采集状态的条目数量。
+
+    Args: bundle 为已加载 items 的资料包；status 为目标状态字符串。
+    Returns: 匹配条目数量。
+    Raises: bundle 未加载 items 时可能触发 ORM 访问异常。
+    副作用：仅读取关联条目；由库存构建流程调用。
+    """
     return sum(1 for item in bundle.items if item.status == status)
 
 
 def list_by_run(session: Session, model, run_id: str):
+    """按模型约定的时间字段读取某个 run 的实体集合。
+
+    Args: session 为数据库会话；model 为允许的 run 关联 ORM 模型；run_id 为运行 ID。
+    Returns: 按稳定顺序排列的实体列表。
+    Raises: 数据库查询异常向上抛出。
+    副作用：仅读取数据库；由分析包构建流程调用。
+    """
     if model is LoopTurn:
         order_by = (LoopTurn.turn_index.asc(), LoopTurn.id.asc())
     else:

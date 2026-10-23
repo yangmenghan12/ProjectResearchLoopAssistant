@@ -330,6 +330,9 @@ export type ToolRegistration = {
   permission_level: string;
   input_schema_json: Record<string, unknown>;
   enabled: boolean;
+  transport: "local" | "mcp";
+  model_visible: boolean;
+  host_only: boolean;
   created_at: string;
   updated_at: string;
 };

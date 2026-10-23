@@ -4,9 +4,9 @@ from typing import Any
 
 @dataclass
 class LLMReportValidation:
-    accepted: bool
-    normalized: dict[str, Any] | None = None
-    messages: list[str] = field(default_factory=list)
+    accepted: bool  # LLM 报告片段是否通过字段和证据引用校验。
+    normalized: dict[str, Any] | None = None  # 规范化后的报告章节内容。
+    messages: list[str] = field(default_factory=list)  # 校验失败或清洗过程中的诊断消息。
 
 
 MAX_EXECUTIVE_SUMMARY_LENGTH = 2000

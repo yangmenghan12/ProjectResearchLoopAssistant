@@ -18,10 +18,24 @@ UNCONFIGURED_ERROR = "LLM profile is not configured"
 
 class LLMRouter:
     def __init__(self, session: Session, transport: httpx.BaseTransport | None = None) -> None:
+        """保存数据库会话和可选 HTTP transport，供后续 LLM 调用复用。
+
+        Args: session 为记录账本和预算的数据库会话；transport 用于测试或自定义 HTTP 客户端。
+        Returns: None。
+        Raises: 无显式异常。
+        副作用：仅保存引用，不发起网络请求或数据库写入。
+        """
         self.session = session
         self.transport = transport
 
     def profile_for(self, task_type: str) -> LLMProfile | None:
+        """按任务类型选择数据库 profile，缺失时回退到应用默认配置。
+
+        Args: task_type 为调用任务类型。
+        Returns: 选中的 LLMProfile；没有可用配置时为 None。
+        Raises: 数据库查询或配置构造异常向上抛出。
+        副作用：仅读取数据库和设置；由 API 与 graph 调用。
+        """
         db_profile = get_enabled_profile(self.session, task_type)
         if db_profile is not None:
             return db_profile
@@ -69,7 +83,15 @@ class LLMRouter:
         input_refs: list[str] | None = None,
         output_ref: str | None = None,
         required: bool = False,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict:
+        """按任务类型选择 LLM profile，执行调用并记录预算与账本结果。
+
+        Args: task_type 为任务名；messages 为 OpenAI-compatible 消息列表；其余关联 ID 可选。
+        Returns: 含 status、call_id、text、usage 的结果字典。
+        Raises: required=True 且未配置、超预算或调用失败时抛出异常。
+        副作用：可能访问外部 LLM，写入 LLMCall 和预算审计；由 graph、报告和 smoke-test 调用。
+        """
         profile, api_key = self._profile_and_api_key_for_call(task_type, profile_id)
         if profile is None or not profile_is_configured(profile, api_key=api_key):
             call = record_llm_call(
@@ -156,6 +178,7 @@ class LLMRouter:
                 messages=messages,
                 max_tokens=profile.max_tokens,
                 temperature=profile.temperature,
+                **({"tools": tools} if tools else {}),
             )
         except Exception as exc:
             latency_ms = int((perf_counter() - started) * 1000)
@@ -210,5 +233,6 @@ class LLMRouter:
             "status": "succeeded",
             "call_id": call.id,
             "text": result.get("text", ""),
+            "tool_calls": result.get("tool_calls", []),
             "usage": result.get("usage", {}),
         }

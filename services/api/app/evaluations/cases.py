@@ -5,14 +5,14 @@ from shutil import rmtree
 
 @dataclass(frozen=True)
 class EvaluationCase:
-    case_id: str
-    description: str
-    expected_checks: list[str]
-    case_type: str = "scan_regression"
-    research_profile: str | None = None
-    expected_profile_checks: list[str] = field(default_factory=list)
-    expected_report_sections: list[str] = field(default_factory=list)
-    expected_bundle_status: str | None = None
+    case_id: str  # evaluation case 的稳定标识。
+    description: str  # fixture 和预期行为的说明。
+    expected_checks: list[str]  # 必须通过的检查名列表。
+    case_type: str = "scan_regression"  # case 使用的 evaluation 分支类型。
+    research_profile: str | None = None  # 可选的调研 profile key。
+    expected_profile_checks: list[str] = field(default_factory=list)  # profile verifier 的预期检查名。
+    expected_report_sections: list[str] = field(default_factory=list)  # 报告应包含的章节标题。
+    expected_bundle_status: str | None = None  # source bundle 的预期聚合状态。
 
 
 def evaluation_cases() -> list[EvaluationCase]:

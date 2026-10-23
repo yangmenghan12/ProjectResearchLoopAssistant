@@ -8,14 +8,14 @@ DEFAULT_RESEARCH_PROFILE = "quick_onboarding"
 
 @dataclass(frozen=True)
 class ResearchProfile:
-    key: str
-    label: str
-    description: str
-    checklist: list[str]
-    quality_weights: dict[str, float]
-    verifier_checks: list[str]
-    report_sections: list[str]
-    required_evidence_types: list[str]
+    key: str  # profile 的稳定 key，用于项目配置和路由选择。
+    label: str  # 面向用户展示的 profile 名称。
+    description: str  # profile 关注范围的简要说明。
+    checklist: list[str]  # 该 profile 期望覆盖的调研要点。
+    quality_weights: dict[str, float]  # 各质量维度在总分中的权重。
+    verifier_checks: list[str]  # 该 profile 要求执行的 verifier 检查名。
+    report_sections: list[str]  # 报告应生成的 profile 专属章节。
+    required_evidence_types: list[str]  # 该 profile 需要的证据类型。
 
 
 PROFILE_REGISTRY: dict[str, ResearchProfile] = {
@@ -139,12 +139,33 @@ PROFILE_REGISTRY: dict[str, ResearchProfile] = {
 
 
 def list_research_profiles() -> list[ResearchProfile]:
+    """返回当前注册的全部研究 profile，供配置和前端展示使用。
+
+    Args: 无。
+    Returns: ResearchProfile 列表。
+    Raises: 无显式异常。
+    副作用：无；仅读取进程内注册表。
+    """
     return list(PROFILE_REGISTRY.values())
 
 
 def get_research_profile(key: str | None) -> ResearchProfile:
+    """按 key 读取研究 profile，缺失或未知时回退到默认 profile。
+
+    Args: key 为可选 profile key。
+    Returns: 匹配的 ResearchProfile。
+    Raises: 注册表缺少默认 profile 时抛出 KeyError。
+    副作用：无；由分析、评分和 verifier 流程调用。
+    """
     return PROFILE_REGISTRY.get(key or DEFAULT_RESEARCH_PROFILE) or PROFILE_REGISTRY[DEFAULT_RESEARCH_PROFILE]
 
 
 def research_profile_exists(key: str) -> bool:
+    """判断指定 profile key 是否已注册。
+
+    Args: key 为待查询的 profile key。
+    Returns: 已注册时为 True，否则为 False。
+    Raises: 无显式异常。
+    副作用：无；由配置校验接口调用。
+    """
     return key in PROFILE_REGISTRY

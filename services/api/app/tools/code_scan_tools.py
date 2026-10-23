@@ -69,7 +69,13 @@ def is_test_file(relative_path: str) -> bool:
 
 
 def scan_codebase(root: Path, max_file_bytes: int, excerpt_chars: int) -> dict:
-    """扫描代码目录的结构线索；不执行脚本，不跟随 symlink。"""
+    """只读扫描代码库，提取技术栈、关键文件、树结构和 README 摘要。
+
+    Args: root 为存在的目录；max_file_bytes 为单文件读取上限；excerpt_chars 为摘要字符上限。
+    Returns: 包含文件树、依赖、测试、入口和跳过项的扫描字典。
+    Raises: root 不存在或目录遍历失败时抛出 OSError/ValueError。
+    副作用：读取本地文件系统，不执行源码或脚本；由采集器和只读工具调用。
+    """
 
     root = root.resolve()
     tech_stack: set[str] = set()

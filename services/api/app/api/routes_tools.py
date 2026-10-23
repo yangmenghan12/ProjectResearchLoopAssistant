@@ -12,7 +12,13 @@ router = APIRouter(tags=["tools"])
 
 @router.get("/tools", response_model=list[ToolRegistrationRead])
 def list_tools() -> list:
-    """返回内存中的默认只读工具注册表，不依赖数据库 seed。"""
+    """返回统一注册表中的本地、MCP 与宿主采集工具，不依赖数据库 seed。
+
+    Args: 无。
+    Returns: ToolDefinition 列表。
+    Raises: 不主动抛出业务异常。
+    副作用：仅读取内存中的默认注册表；由 tools 页面调用。
+    """
 
     return list_default_tools()
 
@@ -23,6 +29,13 @@ def list_run_tool_calls(
     run_id: str,
     session: Session = Depends(get_session),
 ) -> list[ToolCall]:
+    """返回指定 run 的工具调用账本，限制在对应项目内。
+
+    Args: project_id/run_id 为资源 ID；session 为数据库会话。
+    Returns: ToolCall 列表，按创建时间升序排列。
+    Raises: 项目或 run 不存在时返回 HTTP 404。
+    副作用：仅读取数据库；由运行详情或调试页面调用。
+    """
     project = session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")

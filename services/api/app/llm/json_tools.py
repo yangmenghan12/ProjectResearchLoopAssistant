@@ -16,6 +16,13 @@ def _strip_markdown_fence(text: str) -> str:
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
+    """从模型文本中提取单个 JSON object，供结构化输出校验使用。
+
+    Args: text 为模型响应文本，可包含 Markdown fence 或额外说明。
+    Returns: 解析后的字典对象。
+    Raises: 找不到 object、JSON 无效或顶层不是 object 时抛出 ValueError。
+    副作用：无；由 analyzer、verifier 和 report generator 调用。
+    """
     normalized = _strip_markdown_fence(text)
     decoder = json.JSONDecoder()
 

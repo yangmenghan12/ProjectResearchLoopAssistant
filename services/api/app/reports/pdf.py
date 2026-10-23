@@ -14,6 +14,13 @@ BODY_LEADING = 14
 
 
 def render_markdown_pdf(title: str, markdown: str) -> bytes:
+    """将 Markdown 的逐行文本渲染为支持中文字体的 PDF 字节流。
+
+    Args: title 为 PDF 标题；markdown 为待渲染正文字符串。
+    Returns: 可直接作为 HTTP body 的 PDF bytes。
+    Raises: ReportLab 字体注册或渲染失败时抛出异常。
+    副作用：仅在内存中生成 PDF；由报告导出 handler 调用。
+    """
     buffer = BytesIO()
     _, page_height = A4
     pdf = canvas.Canvas(buffer, pagesize=A4)

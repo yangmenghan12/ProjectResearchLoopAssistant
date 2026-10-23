@@ -45,7 +45,15 @@ class OpenAICompatibleClient:
         messages: list[dict],
         max_tokens: int = 512,
         temperature: float = 0.2,
+        tools: list[dict] | None = None,
     ) -> dict:
+        """向兼容 Chat Completions 的 provider 发送一次非流式请求。
+
+        Args: messages 为消息列表；max_tokens 为非负输出上限；temperature 通常在 0–2。
+        Returns: 含 provider、model、text 和 usage 的响应字典。
+        Raises: 未配置、网络失败、非 2xx 响应或响应 JSON 异常时抛出异常。
+        副作用：发起外部 HTTP POST；由 `LLMRouter.chat` 和 smoke-test 调用。
+        """
         if not self.is_configured():
             raise ValueError("LLM provider is not configured")
 
@@ -57,6 +65,9 @@ class OpenAICompatibleClient:
             "stream": False,
         }
         headers = {"Content-Type": "application/json"}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -76,5 +87,6 @@ class OpenAICompatibleClient:
             "provider": self.provider,
             "model": self.model,
             "text": text,
+            "tool_calls": choices[0].get("message", {}).get("tool_calls", []) if choices else [],
             "usage": body.get("usage", {}),
         }

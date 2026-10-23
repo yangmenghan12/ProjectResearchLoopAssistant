@@ -10,9 +10,16 @@ def verify_analysis_package(package: dict[str, Any], inventory: dict[str, Any]) 
 
     这里不让 LLM 自己判断“我完成了”，而是检查已落库的证据、发现、风险、
     问题和质量分数。warning 会影响风险等级，但不会阻塞人工评审入口。
+
+    Args: package 为已持久化分析包；inventory 为来源采集结果。
+    Returns: 含 passed、risk_level、checks 和原因列表的 verifier 结果。
+    Raises: 输入不是预期字典结构时可能抛出类型异常。
+    副作用：无；由报告生成和分析质量流程调用。
     """
 
+    # profile 决定额外的研究类型检查，但不会替代通用确定性检查。
     profile = resolve_research_profile(package)
+    # checks 保存所有检查的 passed/severity/messages，后续据此提取阻断项和警告项。
     checks: list[dict[str, Any]] = []
     checks.append(check_structure(package))
     checks.append(check_evidence_coverage(package))
@@ -22,6 +29,7 @@ def verify_analysis_package(package: dict[str, Any], inventory: dict[str, Any]) 
     checks.append(check_quality_score(package))
     checks.extend(check_profile_requirements(profile, package, inventory))
 
+    # error 级别检查会阻断通过；warning 只提升风险等级并提供诊断。
     blocking_reasons = [
         message
         for check in checks
@@ -42,6 +50,7 @@ def verify_analysis_package(package: dict[str, Any], inventory: dict[str, Any]) 
     else:
         risk_level = "low"
 
+    # deterministic_result 是不依赖 LLM 的基线结果，最后再叠加可选 LLM 复核意见。
     deterministic_result = {
         "passed": passed,
         "risk_level": risk_level,
@@ -51,6 +60,7 @@ def verify_analysis_package(package: dict[str, Any], inventory: dict[str, Any]) 
         "blocking_reasons": blocking_reasons,
         "warning_reasons": warning_reasons,
     }
+    # 返回最终 verifier 结果，保留确定性检查并合并已有的 LLM 辅助结果。
     return merge_llm_verifier_result(deterministic_result, latest_llm_assisted_result(package))
 
 
@@ -107,6 +117,13 @@ def check_profile_requirements(
     package: dict[str, Any],
     inventory: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """根据研究 profile 配置执行对应的确定性覆盖检查。
+
+    Args: profile 为研究类型配置；package 为分析包；inventory 为采集库存。
+    Returns: 每个 profile check 的结构化检查结果列表。
+    Raises: 检查 handler 内部异常向上抛出。
+    副作用：无；由 `verify_analysis_package` 汇总调用。
+    """
     checks: list[dict[str, Any]] = []
     for check_name in profile.verifier_checks:
         handler = PROFILE_CHECK_HANDLERS.get(check_name)
@@ -289,6 +306,13 @@ def latest_llm_assisted_result(package: dict[str, Any]) -> dict[str, Any] | None
 
 
 def check_structure(package: dict[str, Any]) -> dict[str, Any]:
+    """检查分析包是否包含运行时间线、证据、发现、建议和质量评分等必需部分。
+
+    Args: package 为待校验的分析包字典。
+    Returns: 标准化的结构完整性检查结果。
+    Raises: 非字典输入可能触发属性访问异常。
+    副作用：无；由确定性 verifier 调用。
+    """
     required_sections = {
         "turns": "缺少 Loop 运行时间线。",
         "evidence_items": "缺少证据部分。",
@@ -306,6 +330,13 @@ def check_structure(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_evidence_coverage(package: dict[str, Any]) -> dict[str, Any]:
+    """检查 findings 和 risks 是否引用分析包中实际存在的证据。
+
+    Args: package 为包含 evidence_items、findings 和 risks 的分析包。
+    Returns: 标准化的证据覆盖检查结果。
+    Raises: 输入集合结构异常时可能向上抛出。
+    副作用：无；由确定性 verifier 调用。
+    """
     evidence_ids = {str(value_of(evidence, "id")) for evidence in as_list(package.get("evidence_items"))}
     messages: list[str] = []
 
@@ -334,6 +365,13 @@ def check_evidence_coverage(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_codebase_coverage(inventory: dict[str, Any]) -> dict[str, Any]:
+    """检查代码库采集结果是否包含技术栈、入口和测试线索。
+
+    Args: inventory 为来源采集后的库存字典。
+    Returns: 带 error、warning 或 info 严重级别的覆盖检查结果。
+    Raises: 输入结构异常时可能向上抛出。
+    副作用：无；由确定性 verifier 调用。
+    """
     snapshots = as_list(inventory.get("snapshots"))
     codebase_maps = as_list(inventory.get("codebase_maps"))
     messages: list[str] = []
@@ -372,6 +410,13 @@ def check_codebase_coverage(inventory: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_risk_transparency(package: dict[str, Any]) -> dict[str, Any]:
+    """检查每条风险是否提供严重程度和缓解建议。
+
+    Args: package 为包含 risks 集合的分析包。
+    Returns: 标准化的风险透明度检查结果。
+    Raises: 输入集合结构异常时可能向上抛出。
+    副作用：无；由确定性 verifier 调用。
+    """
     messages: list[str] = []
     for risk in as_list(package.get("risks")):
         title = value_of(risk, "title", "未命名风险")
@@ -388,6 +433,13 @@ def check_risk_transparency(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_question_resolution(package: dict[str, Any]) -> dict[str, Any]:
+    """检查未回答问题，尤其识别仍处于 open 的高影响问题。
+
+    Args: package 为包含 questions 集合的分析包。
+    Returns: 标准化的问题解决度检查结果。
+    Raises: 输入集合结构异常时可能向上抛出。
+    副作用：无；由确定性 verifier 调用。
+    """
     messages: list[str] = []
     severity = "warning"
     for question in as_list(package.get("questions")):
@@ -408,6 +460,13 @@ def check_question_resolution(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_quality_score(package: dict[str, Any]) -> dict[str, Any]:
+    """按质量分数阈值判断分析包是否达到发布条件。
+
+    Args: package 为包含 quality_scores 集合的分析包。
+    Returns: 反映 70、85 分阈值的结构化检查结果。
+    Raises: overall_score 无法转换为整数时抛出异常。
+    副作用：无；由确定性 verifier 调用。
+    """
     latest_score = latest_item(package.get("quality_scores"))
     if latest_score is None:
         return check_result(
@@ -440,6 +499,13 @@ def check_quality_score(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_result(name: str, passed: bool, severity: str, messages: list[str]) -> dict[str, Any]:
+    """统一构造 verifier 检查结果，保持 API 输出字段一致。
+
+    Args: name 为检查名；passed 为是否通过；severity 为严重级别；messages 为诊断信息。
+    Returns: 含 name、passed、severity、messages 的字典。
+    Raises: 无显式异常。
+    副作用：无；由各项 verifier 检查调用。
+    """
     return {
         "name": name,
         "passed": passed,
@@ -454,6 +520,13 @@ def build_summary(
     blocking_reasons: list[str],
     warning_reasons: list[str],
 ) -> str:
+    """根据阻断项和警告项生成面向报告的简短 verifier 摘要。
+
+    Args: passed 为总体结果；risk_level 为风险级别；两类 reasons 为诊断消息列表。
+    Returns: 中文摘要字符串。
+    Raises: 无显式异常。
+    副作用：无；由 `verify_analysis_package` 调用。
+    """
     if not passed:
         return f"报告存在 {len(blocking_reasons)} 个阻塞问题；风险等级为 {risk_label(risk_level)}。"
     if warning_reasons:

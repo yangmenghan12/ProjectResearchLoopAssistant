@@ -12,6 +12,13 @@ def read_text_excerpt(path: Path, excerpt_chars: int) -> str:
 
 
 def read_pdf_excerpt(path: Path, excerpt_chars: int) -> tuple[str | None, int]:
+    """读取 PDF 前几页的文本片段，限制长度以控制采集成本。
+
+    Args: path 为 PDF 文件路径；excerpt_chars 为返回片段的最大字符数，通常为正整数。
+    Returns: `(文本片段或 None, 总页数)`；无法提取文本时片段为 None。
+    Raises: 未安装 pypdf 或文件解析失败时抛出异常，由上层决定是否降级。
+    副作用：读取本地 PDF，不写入文件；由 `read_local_file` 调用。
+    """
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -34,7 +41,13 @@ def read_pdf_excerpt(path: Path, excerpt_chars: int) -> tuple[str | None, int]:
 
 
 def read_local_file(path: Path, max_file_bytes: int, excerpt_chars: int) -> dict:
-    """只读读取本地文件，返回摘要和元数据，不写入或修改原文件。"""
+    """读取受大小限制的本地文本或 PDF，并返回可用于证据的摘要元数据。
+
+    Args: path 为存在的文件；max_file_bytes 为大小上限；excerpt_chars 为摘要上限。
+    Returns: 含 status、title、content_excerpt 和 metadata 的字典。
+    Raises: 路径非法、文件超限或读取失败时抛出异常。
+    副作用：读取本地文件，不修改文件；由 source collector 和 bundle service 调用。
+    """
 
     policy_path = path.expanduser()
     if not policy_path.is_absolute():

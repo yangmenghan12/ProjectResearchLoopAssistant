@@ -10,6 +10,9 @@ class ToolRegistrationRead(BaseModel):
     permission_level: str
     input_schema_json: dict
     enabled: bool
+    transport: str = "local"
+    model_visible: bool = False
+    host_only: bool = False
     created_at: datetime
     updated_at: datetime
 

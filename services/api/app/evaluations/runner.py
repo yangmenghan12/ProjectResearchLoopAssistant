@@ -233,6 +233,13 @@ def build_summary(results: list[dict]) -> dict:
 def run_evaluations(
     session: Session, *, workspace_root: Path | None = None
 ) -> EvaluationRun:
+    """执行全部 evaluation cases，并把汇总结果保存为 EvaluationRun。
+
+    Args: session 为数据库会话；workspace_root 可选临时目录根路径。
+    Returns: 已提交并刷新的 EvaluationRun。
+    Raises: case fixture、扫描或数据库异常向上抛出。
+    副作用：写入或清理 fixture workspace，并写入 evaluation 结果；由 evaluation API 调用。
+    """
     workspace_context = (
         nullcontext(workspace_root)
         if workspace_root is not None
